@@ -23,6 +23,7 @@ struct Context {
     score: i32,
     enemy_max: u32,
     enemy_count: u32,
+    paused: bool,
     over: bool,
 }
 
@@ -98,6 +99,7 @@ impl Game {
                 score: 0,
                 enemy_max: 10,
                 enemy_count: 0,
+                paused: false,
                 over: false,
             },
             textures: HashMap::new(),
@@ -220,6 +222,14 @@ impl Game {
         if self.context.over {
             return;
         }
+
+        if self.rl.is_key_pressed(KeyboardKey::KEY_PAUSE) {
+            self.context.paused = !self.context.paused;
+        }
+
+        if self.context.paused {
+            return;
+        }
         
         if self.rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
             let player_rect = *self.context.entities.get(&self.context.player_id).unwrap().as_collidable().unwrap().rect();
@@ -257,6 +267,19 @@ impl Game {
             );
             d.draw_text(
                 "Press any key to exit", 
+                (SCREEN_WIDTH/2. - 180.) as i32, 
+                (SCREEN_HEIGHT/2. + 40.) as i32, 
+                30, Color::WHITE
+            );
+        } else if self.context.paused {
+            d.draw_text(
+                "GAME PAUSED", 
+                (SCREEN_WIDTH/2. - 180.) as i32, 
+                (SCREEN_HEIGHT/2.) as i32, 
+                40, Color::WHITE
+            );
+            d.draw_text(
+                "Press PAUSE to continue", 
                 (SCREEN_WIDTH/2. - 180.) as i32, 
                 (SCREEN_HEIGHT/2. + 40.) as i32, 
                 30, Color::WHITE
