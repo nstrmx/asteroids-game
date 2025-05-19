@@ -1,8 +1,8 @@
 use rand::*;
 use raylib::prelude::*;
 
-use crate::{SCREEN_WIDTH, SCREEN_HEIGHT, Textures};
-use crate::collision::*;
+use crate::{SCREEN_WIDTH, SCREEN_HEIGHT, Textures, Collidable};
+
 
 pub type EntityId = usize;
 
@@ -15,7 +15,7 @@ pub enum EntityType {
 }
 
 pub trait Entity {
-    fn r#type(&self) -> &EntityType;
+    fn entity_type(&self) -> &EntityType;
     fn update(&mut self, rl: &mut RaylibHandle);
     fn draw(&self, d: &mut RaylibDrawHandle, textures: &Textures);
     fn as_collidable(&self) -> Option<&dyn Collidable> {
@@ -40,7 +40,7 @@ pub trait Movable {
 }
 
 pub struct Player {
-    rect: Rectangle,
+    pub rect: Rectangle,
     acceleration: f32,
     friction: f32,
     max_velocity: f32,
@@ -65,7 +65,7 @@ impl Player {
 }
 
 impl Entity for Player {
-    fn r#type(&self) -> &EntityType {
+    fn entity_type(&self) -> &EntityType {
         &EntityType::Player
     }
 
@@ -131,18 +131,8 @@ impl Entity for Player {
     }
 }
 
-impl Collidable for Player {
-    fn rect(&self) -> &Rectangle {
-        &self.rect
-    }
-
-    fn r#type(&self) -> CollisionType {
-        CollisionType::Triangle
-    }
-}
-
 pub struct Lazer {
-    rect: Rectangle,
+    pub rect: Rectangle,
     color: Color,
     speed: i32,
 }
@@ -150,7 +140,7 @@ pub struct Lazer {
 impl Lazer {
     pub fn new(x: f32, y: f32) -> Self {
         Self {
-            rect: Rectangle::new(x, y - 45., 1., 45.),
+            rect: Rectangle::new(x, y - 45., 2., 45.),
             color: Color::RED,
             speed: 11,
         }
@@ -158,7 +148,7 @@ impl Lazer {
 }
 
 impl Entity for Lazer {
-    fn r#type(&self) -> &EntityType {
+    fn entity_type(&self) -> &EntityType {
         &EntityType::Projectile    
     }
     
@@ -175,18 +165,8 @@ impl Entity for Lazer {
     } 
 }
 
-impl Collidable for Lazer {
-    fn rect(&self) -> &Rectangle {
-        &self.rect
-    }
-
-    fn r#type(&self) -> CollisionType {
-        CollisionType::Rectangle
-    }
-}
-
 pub struct Barrier {
-    rect: Rectangle,
+    pub rect: Rectangle,
 }
 
 impl Barrier {
@@ -196,7 +176,7 @@ impl Barrier {
 }
 
 impl Entity for Barrier {
-    fn r#type(&self) -> &EntityType {
+    fn entity_type(&self) -> &EntityType {
         &EntityType::Indestructible        
     }
 
@@ -206,16 +186,6 @@ impl Entity for Barrier {
 
     fn as_collidable(&self) -> Option<&dyn Collidable> {
         Some(self)
-    }
-}
-
-impl Collidable for Barrier {
-    fn rect(&self) -> &Rectangle {
-        &self.rect
-    }
-
-    fn r#type(&self) -> CollisionType {
-        CollisionType::Rectangle
     }
 }
 
@@ -241,7 +211,7 @@ impl Star {
 }
 
 impl Entity for Star {
-    fn r#type(&self) -> &EntityType {
+    fn entity_type(&self) -> &EntityType {
         &EntityType::Indestructible
     }
 
@@ -259,7 +229,7 @@ impl Entity for Star {
 }
 
 pub struct Asteroid {
-    rect: Rectangle,
+    pub rect: Rectangle,
     velocity: Vector2,
     mass: f32,
     rotation: f32,
@@ -291,7 +261,7 @@ impl Asteroid {
 }
 
 impl Entity for Asteroid {
-    fn r#type(&self) -> &EntityType {
+    fn entity_type(&self) -> &EntityType {
         &EntityType::Enemy
     }
 
@@ -329,16 +299,6 @@ impl Entity for Asteroid {
             self.rotation, self.color
         );
         // d.draw_rectangle_rec(self.rect, self.color);
-    }
-}
-
-impl Collidable for Asteroid {
-    fn rect(&self) -> &Rectangle {
-        &self.rect
-    }
-
-    fn r#type(&self) -> CollisionType {
-        CollisionType::Circle
     }
 }
 

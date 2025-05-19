@@ -7,15 +7,15 @@ pub enum CollisionType {
     Triangle,
 }
 
-struct Circle {
-    center: Vector2,
-    radius: f32,    
+pub struct Circle {
+    pub center: Vector2,
+    pub radius: f32,    
 }
 
-struct Triangle {
-    a: Vector2,
-    b: Vector2,
-    c: Vector2
+pub struct Triangle {
+    pub a: Vector2,
+    pub b: Vector2,
+    pub c: Vector2
 }
 
 impl Triangle {
@@ -26,83 +26,6 @@ impl Triangle {
             (self.c, self.a),
         ]
     }
-}
-
-pub trait Collidable {
-    fn rect(&self) -> &Rectangle;
-    fn collides(&self, other: &dyn Collidable) -> bool {
-        let rect1 = self.rect();
-        let rect2 = other.rect();
-        match (self.r#type(), other.r#type()) {
-            (CollisionType::Circle, CollisionType::Circle) => {
-                check_collision_circles(
-                    Vector2::new(rect1.x + rect1.width/2., rect1.y + rect1.height/2.),
-                    rect1.width/2.,
-                    Vector2::new(rect2.x + rect2.width/2., rect2.y + rect2.height/2.),
-                    rect2.width/2.,
-                )
-            }
-            (CollisionType::Circle, CollisionType::Rectangle) => {
-                rect2.check_collision_circle_rec(
-                    Vector2::new(rect1.x + rect1.width/2., rect1.y + rect1.height/2.),
-                    rect1.width/2.,
-                )
-            }
-            (CollisionType::Circle, CollisionType::Triangle) => {
-                check_collision_circle_triangle(
-                    &Circle{
-                        center: Vector2::new(rect1.x+rect1.width/2., rect1.y+rect1.height/2.),
-                        radius: rect1.width/2.,
-                    },
-                    &Triangle{
-                        a: Vector2::new(rect2.x, rect2.y+rect2.height),
-                        b: Vector2::new(rect2.x+rect2.width, rect2.y+rect2.height),
-                        c: Vector2::new(rect2.x+rect2.width/2., rect2.y)
-                    }
-                )
-            }
-            (CollisionType::Rectangle, CollisionType::Rectangle) => {
-                rect1.check_collision_recs(rect2)   
-            }
-            (CollisionType::Rectangle, CollisionType::Circle) => {
-                rect1.check_collision_circle_rec(
-                    Vector2::new(rect2.x + rect2.width/2., rect2.y + rect2.height/2.),
-                    rect2.width/2.,
-                )
-            }
-            (CollisionType::Rectangle, CollisionType::Triangle) => {
-               check_collision_rect_triangle(rect1, &Triangle {
-                    a: Vector2::new(rect2.x, rect2.y+rect2.height),
-                    b: Vector2::new(rect2.x+rect2.width, rect2.y+rect2.height),
-                    c: Vector2::new(rect2.x+rect2.width/2., rect2.y)
-                })
-            }
-            (CollisionType::Triangle, CollisionType::Circle) => {
-                check_collision_circle_triangle(
-                    &Circle{
-                        center: Vector2::new(rect2.x+rect2.width/2., rect2.y+rect2.height/2.),
-                        radius: rect2.width/2.,
-                    },
-                    &Triangle{
-                        a: Vector2::new(rect1.x, rect1.y+rect1.height),
-                        b: Vector2::new(rect1.x+rect1.width, rect1.y+rect1.height),
-                        c: Vector2::new(rect1.x+rect1.width/2., rect1.y)
-                    }
-                )
-            }
-            (CollisionType::Triangle, CollisionType::Rectangle) => {
-                check_collision_rect_triangle(rect2, &Triangle { 
-                    a: Vector2::new(rect1.x, rect1.y+rect1.height),
-                    b: Vector2::new(rect1.x+rect1.width, rect1.y+rect1.height),
-                    c: Vector2::new(rect1.x+rect1.width/2., rect1.y)
-                })
-            }
-            (CollisionType::Triangle, CollisionType::Triangle) => {
-                unreachable!()
-            }
-        }
-    }
-    fn r#type(&self) -> CollisionType;
 }
 
 // Helper function to calculate distance squared between points
@@ -202,7 +125,7 @@ fn rect_to_poly(rect: &Rectangle) -> [Vector2; 4] {
     ]
 }
 
-fn check_collision_rect_triangle(rect: &Rectangle, tri: &Triangle) -> bool {
+pub fn check_collision_rect_triangle(rect: &Rectangle, tri: &Triangle) -> bool {
     let rect_poly = rect_to_poly(rect);
     let tri_poly = [tri.a, tri.b, tri.c];
     
@@ -252,7 +175,7 @@ fn check_collision_rect_triangle(rect: &Rectangle, tri: &Triangle) -> bool {
     true
 }
 
-fn check_collision_circle_triangle(circle: &Circle, tri: &Triangle) -> bool {
+pub fn check_collision_circle_triangle(circle: &Circle, tri: &Triangle) -> bool {
     // Check if circle center is inside the triangle
     if point_in_triangle(circle.center, tri) {
         return true;

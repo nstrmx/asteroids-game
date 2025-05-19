@@ -3,11 +3,14 @@ use raylib::prelude::*;
 
 mod events;
 mod entities;
+mod collidable;
 mod collision;
 
 use events::*;
 use entities::*;
+use collidable::*;
 use collision::*;
+
 
 const SCREEN_WIDTH: f32 = 1200.0;
 const SCREEN_HEIGHT: f32 = 600.0;
@@ -163,8 +166,8 @@ impl Game {
                 let col1 = entity1.as_collidable().unwrap();
                 let col2 = entity2.as_collidable().unwrap(); 
         
-                if col1.collides(col2) {
-                    match (entity1.r#type(), entity2.r#type()) {
+                if col1.check_collision(col2) {
+                    match (entity1.entity_type(), entity2.entity_type()) {
                         (EntityType::Player, EntityType::Enemy)
                         | (EntityType::Enemy, EntityType::Player) => {
                             destroyed = true;
@@ -176,17 +179,24 @@ impl Game {
                             *self.context.entities.get_mut(&id2).unwrap() = Box::new(Asteroid::new());
                             self.context.score += 100;
                             self.context.new_asteroid();
+                            break;
                         }
                         (EntityType::Enemy, EntityType::Projectile) => {
                             self.context.entities.remove(&id2);
                             *self.context.entities.get_mut(&id1).unwrap() = Box::new(Asteroid::new());
                             self.context.score += 100;
                             self.context.new_asteroid();
+                            break;
                         }
                         (EntityType::Projectile, EntityType::Projectile) => {
                             destroyed = true;
                             self.context.entities.remove(&id1);
                             self.context.entities.remove(&id2);
+                            break;
+                        }
+                        (EntityType::Projectile, EntityType::Indestructible) => {
+                            self.context.entities.remove(&id1);
+                            break;
                         }
                         (EntityType::Indestructible, EntityType::Projectile) => {
                             self.context.entities.remove(&id2);
@@ -240,8 +250,6 @@ impl Game {
         
         self.check_collisions();
 
-        println!("enemy count: {}", self.context.enemy_count);
-
         for (_id, entity) in self.context.entities.iter_mut() {
             entity.update(&mut self.rl);
         }    
@@ -257,6 +265,7 @@ impl Game {
 
         // Draw UI
         d.draw_text(&format!("score: {}", self.context.score), 35, 10, 20, Color::WHITE);
+        d.draw_fps(35, 30);
 
         if self.context.over {
             d.draw_text(
