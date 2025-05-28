@@ -1,36 +1,43 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use raylib::prelude::*;
 
 mod events;
 mod entities;
-mod collidable;
 mod collision;
 
 use events::*;
 use entities::*;
-use collidable::*;
 use collision::*;
 
 
-const SCREEN_WIDTH: f32 = 1200.0;
-const SCREEN_HEIGHT: f32 = 600.0;
+static mut SCREEN_WIDTH: i32 = 1200;
+static mut SCREEN_HEIGHT: i32 = 800;
+
+#[macro_export]
+macro_rules! SCREEN_WIDTH {
+    () => { unsafe{ SCREEN_WIDTH as f32 }};
+    ($w:expr) => { unsafe{ SCREEN_WIDTH = $w; }}
+}
+#[macro_export]
+macro_rules! SCREEN_HEIGHT {
+    () => { unsafe{ SCREEN_HEIGHT as f32 }};
+    ($h:expr) => { unsafe{ SCREEN_HEIGHT = $h; }}
+}
 
 type Textures = HashMap<&'static str, Texture2D>;
 
 
-struct Context {
+struct World {
     id_count: EntityId,
     player_id: EntityId,
-    entities: BTreeMap<EntityId, Box<dyn Entity>>,
+    entities: HashMap<EntityId, Entity>,
+    drawables: Vec<EntityId>,
     collidables: Vec<EntityId>,
-    score: i32,
     enemy_max: u32,
     enemy_count: u32,
-    paused: bool,
-    over: bool,
 }
 
-impl Context {
+impl World {
     fn new_id(&mut self) -> EntityId {
         let id = self.id_count;
         self.id_count += 1;
@@ -39,74 +46,85 @@ impl Context {
 
     fn new_asteroid(&mut self) {
         let id = self.new_id();
-        let asteroid = Asteroid::new();
-        self.entities.insert(id, Box::new(asteroid));
+        let asteroid = Asteroid::new(id);
+        let entity = Entity::Enemy(Box::new(asteroid));
+        self.entities.insert(id, entity);
         self.enemy_count += 1;
         self.collidables.push(id);
-    }
-
-    fn new_barrier(&mut self) {
-        let id = self.new_id();
-        let barrier = Barrier::new(SCREEN_WIDTH, 10.);
-        self.entities.insert(id, Box::new(barrier));
-        self.collidables.push(id);
+        self.drawables.push(id);
     }
 
     fn new_star(&mut self, velocity: f32) {
         let id = self.new_id();
         let star = Star::new(velocity);
-        self.entities.insert(id, Box::new(star));
+        let entity = Entity::Star(Box::new(star));
+        self.entities.insert(id, entity);
+        self.drawables.push(id);
     }
     
     fn new_player(&mut self) {
         let id = self.new_id();
         self.player_id = id;
         let player = Player::new();
-        self.entities.insert(id, Box::new(player));
+        let entity = Entity::Player(Box::new(player));
+        self.entities.insert(id, entity);
         self.collidables.push(id);
+        self.drawables.push(id);
     }
 
     fn new_lazer(&mut self, x: f32, y: f32) {
         let id = self.new_id();
-        let lazer = Lazer::new(x, y);
-        self.entities.insert(id, Box::new(lazer));
+        let lazer = Lazer::new(id, x, y);
+        let entity = Entity::Projectile(Box::new(lazer));
+        self.entities.insert(id, entity);
         self.collidables.push(id);
+        self.drawables.push(id);
     }
 }
 
 struct Game {
     rl: RaylibHandle,
     rt: RaylibThread,
-    _event_bus: EventBus,
-    context: Context,
+    event_bus: EventBus,
+    world: World,
     textures: Textures,
+    camera: Camera2D,
+    paused: bool,
+    score: usize,
+    over: bool,
 }
 
 impl Game {
     fn new() -> Self {
         let (mut rl, rt) = raylib::init()
-            .size(SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32)
             .title("Asteroids")
+            .size(SCREEN_WIDTH!() as i32, SCREEN_HEIGHT!() as i32)
             .vsync()
             .build();
         rl.set_target_fps(60);
 
         Self {
             rl, rt,
-            _event_bus: EventBus::new(),
-            context: Context {
+            event_bus: EventBus::new(),
+            world: World {
                 id_count: 0,
                 player_id: 0,
-                entities: BTreeMap::new(),
+                entities: HashMap::new(),
+                drawables: vec![],
                 collidables: vec![],
-                score: 0,
                 enemy_max: 10,
                 enemy_count: 0,
-                paused: false,
-                over: false,
             },
             textures: HashMap::new(),
-         }    
+            camera: Camera2D::default(),
+            score: 0,
+            paused: false,
+            over: false,
+        }    
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        self.rl.toggle_fullscreen();
     }
 
     fn load_textures(&mut self) {
@@ -122,136 +140,143 @@ impl Game {
 
     fn setup(&mut self) {
         self.load_textures();
-        self.context.new_barrier();
         
         for _i in 0..5000 {
-            self.context.new_star(0.05);
+            self.world.new_star(0.5);
         }
 
         for _i in 0..1000 {
-            self.context.new_star(0.1);
+            self.world.new_star(1.);
         }
          
-        self.context.new_player();
-        for _i in 0..self.context.enemy_max {
-            self.context.new_asteroid();
+        self.world.new_player();
+
+        if let Some(Entity::Player(player)) = self.world.entities.get(&self.world.player_id) {
+            self.camera.target = Vector2::new(player.rect.x + 20.0, player.rect.y + 20.0);
+            self.camera.offset = Vector2::new(SCREEN_WIDTH!()/2.0, SCREEN_HEIGHT!() - player.rect.height - 40.);
+            self.camera.rotation = 0.0;
+            self.camera.zoom = 0.5;    
+        };
+        
+        for _i in 0..self.world.enemy_max {
+            self.world.new_asteroid();
         }
+
+        self.event_bus.subscribe(EventType::EntityDestroyed, Box::new(|e: &Event, ctx: &mut Game|{
+            
+        }));
     }
     
     fn check_collisions(&mut self) {
-        let mut collidables: Vec<EntityId> = Vec::with_capacity(self.context.collidables.len());
-        std::mem::swap(&mut collidables, &mut self.context.collidables);
-
+        let world_ptr = &mut self.world as *mut World;
+        
+        let mut new_asteroids_count = 0;
+        let mut destroyed = vec![];
+        let mut reset_asteroids = vec![];
+        
         let mut i = 0;
-        'outer: while i < collidables.len() {
-            let id1 = collidables[i];
-            let mut destroyed = false;
+        'outer: while i < self.world.collidables.len() {
+            let id1 = self.world.collidables[i];
             let mut j = i + 1;
-            while j < collidables.len() {
-                let id2 = collidables[j];
-                let entity1_opt = self.context.entities.get(&id1);
-                if entity1_opt.is_none() {
+            while j < self.world.collidables.len() {
+                let id2 = self.world.collidables[j];
+                let e1 = if let Some(e) = self.world.entities.get_mut(&id1) {
+                    let ptr = e as *mut Entity;
+                    // SAFETY: Safe unless we do not cause entities' reallocation
+                    unsafe { &mut *ptr }
+                } else {
                     i += 1;
                     continue 'outer;
-                }
-                let entity1 = entity1_opt.unwrap();
-                
-                let entity2_opt = self.context.entities.get(&id2);
-                if entity2_opt.is_none() {
+                };
+                let e2 = if let Some(e) = self.world.entities.get_mut(&id2) {
+                    let ptr = e as *mut Entity;
+                    // SAFETY: Safe unless we do not cause entities' reallocation
+                    unsafe { &mut *ptr }
+                } else {
                     j += 1;
                     continue;
-                }
-                let entity2 = entity2_opt.unwrap();
-
-                let col1 = entity1.as_collidable().unwrap();
-                let col2 = entity2.as_collidable().unwrap(); 
-        
-                if col1.check_collision(col2) {
-                    match (entity1.entity_type(), entity2.entity_type()) {
-                        (EntityType::Player, EntityType::Enemy)
-                        | (EntityType::Enemy, EntityType::Player) => {
-                            destroyed = true;
-                            self.context.over = true;
-                            break;
+                };
+                if e1.check_collision(e2) {
+                    let world = unsafe{ &mut *world_ptr };
+                    for event in e1.on_collision(e2, world) {
+                        match event {
+                            Event::EntityDestroyed(id) => {
+                                destroyed.push(id);
+                                if id == id1 {
+                                    i += 1;
+                                    continue 'outer;
+                                } 
+                            }
+                            Event::NumberOfAsteroidsIncreased => {
+                                new_asteroids_count += 1;                                
+                            }
+                            Event::ResetAsteroid(id) => {
+                                reset_asteroids.push(id);
+                            }
+                            Event::ScoreIncreased => {
+                                self.score += 100;
+                            }
+                            Event::GameOver => {
+                                self.over = true;
+                                return;
+                            }
                         }
-                        (EntityType::Projectile, EntityType::Enemy) => {
-                            self.context.entities.remove(&id1);
-                            *self.context.entities.get_mut(&id2).unwrap() = Box::new(Asteroid::new());
-                            self.context.score += 100;
-                            self.context.new_asteroid();
-                            break;
-                        }
-                        (EntityType::Enemy, EntityType::Projectile) => {
-                            self.context.entities.remove(&id2);
-                            *self.context.entities.get_mut(&id1).unwrap() = Box::new(Asteroid::new());
-                            self.context.score += 100;
-                            self.context.new_asteroid();
-                            break;
-                        }
-                        (EntityType::Projectile, EntityType::Projectile) => {
-                            destroyed = true;
-                            self.context.entities.remove(&id1);
-                            self.context.entities.remove(&id2);
-                            break;
-                        }
-                        (EntityType::Projectile, EntityType::Indestructible) => {
-                            self.context.entities.remove(&id1);
-                            break;
-                        }
-                        (EntityType::Indestructible, EntityType::Projectile) => {
-                            self.context.entities.remove(&id2);
-                        }
-                        (EntityType::Enemy, EntityType::Enemy) => {
-                            let mov1 = entity1.as_movable().unwrap();
-                            let mov2 = entity2.as_movable().unwrap();
-                            
-                            let m1 = *mov1.mass();
-                            let v1 = *mov1.vel();
-                            
-                            let m2 = *mov2.mass();
-                            let v2 = *mov2.vel();
-
-                            let (v1, v2) = elastic_collision_1d(m1, v1.y, m2, v2.y);
-
-                            *self.context.entities.get_mut(&id1).unwrap().as_movable_mut().unwrap().vel_mut() = Vector2::new(0., v1);
-                            *self.context.entities.get_mut(&id2).unwrap().as_movable_mut().unwrap().vel_mut() = Vector2::new(0., v2);
-                        }
-                        _ => (),               
                     }
                 }
                 j += 1;
             }
-            if !destroyed {
-                self.context.collidables.push(id1);
+            for id in reset_asteroids.drain(..) {
+                if let Some(Entity::Enemy(e)) = self.world.entities.get_mut(&id) {
+                    e.reset();
+                }
             }
             i += 1;
+        }
+        for id in destroyed.drain(..) {
+            self.world.entities.remove(&id);
+        }
+        for _ in 0..new_asteroids_count {
+            self.world.new_asteroid();
         }
     }
 
     fn update(&mut self) {
-        if self.context.over {
+        if self.rl.is_key_pressed(KeyboardKey::KEY_F) {
+            if !self.paused {
+                self.paused = true;                
+            }
+
+            self.toggle_fullscreen();
+        }
+
+        if self.over {
             return;
         }
 
         if self.rl.is_key_pressed(KeyboardKey::KEY_PAUSE) {
-            self.context.paused = !self.context.paused;
+            self.paused = !self.paused;
         }
 
-        if self.context.paused {
+        if self.paused {
             return;
         }
         
         if self.rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
-            let player_rect = *self.context.entities.get(&self.context.player_id).unwrap().as_collidable().unwrap().rect();
-            self.context.new_lazer(player_rect.x + player_rect.width / 3., player_rect.y);
-            self.context.new_lazer(player_rect.x + player_rect.width / 2., player_rect.y);
-            self.context.new_lazer(player_rect.x + player_rect.width - player_rect.width / 3., player_rect.y);
+            let opt = if let Some(Entity::Player(e)) = self.world.entities.get(&self.world.player_id) {
+                Some(e.rect)
+            } else { None };
+            if let Some(rect) = opt {
+                self.world.new_lazer(rect.x + rect.width / 3., rect.y);
+                self.world.new_lazer(rect.x + rect.width / 2., rect.y);
+                self.world.new_lazer(rect.x + rect.width - rect.width / 3., rect.y);
+            }
         }
         
         self.check_collisions();
 
-        for (_id, entity) in self.context.entities.iter_mut() {
-            entity.update(&mut self.rl);
+        let delta_time = self.rl.get_frame_time();
+        for (_id, entity) in self.world.entities.iter_mut() {
+            entity.update(&mut self.rl, delta_time);
         }    
     }
 
@@ -259,38 +284,46 @@ impl Game {
         let mut d = self.rl.begin_drawing(&self.rt);
         d.clear_background(Color::BLACK);
 
-        for (_id, entity) in self.context.entities.iter() {
+        for (_, entity) in self.world.entities.iter() {
             entity.draw(&mut d, &self.textures);
         }
 
+        // {
+        //     let mut m = d.begin_mode2D(self.camera);
+
+        //     for (_, entity) in self.world.entities.iter().filter(|(_, e)| e.is_camera_affected()) {
+        //         entity.draw(&mut m, &self.textures);
+        //     }
+        // }
+
         // Draw UI
-        d.draw_text(&format!("score: {}", self.context.score), 35, 10, 20, Color::WHITE);
+        d.draw_text(&format!("score: {}", self.score), 35, 10, 20, Color::WHITE);
         d.draw_fps(35, 30);
 
-        if self.context.over {
+        if self.over {
             d.draw_text(
-                &format!("YOUR SCORE: {}", self.context.score), 
-                (SCREEN_WIDTH/2. - 180.) as i32, 
-                (SCREEN_HEIGHT/2.) as i32, 
+                &format!("YOUR SCORE: {}", self.score), 
+                (SCREEN_WIDTH!()/2. - 180.) as i32, 
+                (SCREEN_HEIGHT!()/2.) as i32, 
                 40, Color::WHITE
             );
             d.draw_text(
                 "Press any key to exit", 
-                (SCREEN_WIDTH/2. - 180.) as i32, 
-                (SCREEN_HEIGHT/2. + 40.) as i32, 
+                (SCREEN_WIDTH!()/2. - 180.) as i32, 
+                (SCREEN_HEIGHT!()/2. + 40.) as i32, 
                 30, Color::WHITE
             );
-        } else if self.context.paused {
+        } else if self.paused {
             d.draw_text(
                 "GAME PAUSED", 
-                (SCREEN_WIDTH/2. - 180.) as i32, 
-                (SCREEN_HEIGHT/2.) as i32, 
+                (SCREEN_WIDTH!()/2. - 180.) as i32, 
+                (SCREEN_HEIGHT!()/2.) as i32, 
                 40, Color::WHITE
             );
             d.draw_text(
                 "Press PAUSE to continue", 
-                (SCREEN_WIDTH/2. - 180.) as i32, 
-                (SCREEN_HEIGHT/2. + 40.) as i32, 
+                (SCREEN_WIDTH!()/2. - 180.) as i32, 
+                (SCREEN_HEIGHT!()/2. + 40.) as i32, 
                 30, Color::WHITE
             );
         }
@@ -300,8 +333,17 @@ impl Game {
         self.setup();
 
         while !self.rl.window_should_close() {
-            if self.context.over && self.rl.is_key_down(KeyboardKey::KEY_ESCAPE) {
-                break;
+            if self.over {
+                if let Some(key) = self.rl.get_key_pressed() {
+                    match key {
+                        KeyboardKey::KEY_SPACE
+                        | KeyboardKey::KEY_LEFT | KeyboardKey::KEY_RIGHT
+                        | KeyboardKey::KEY_UP | KeyboardKey::KEY_DOWN
+                        | KeyboardKey::KEY_A | KeyboardKey::KEY_D
+                        | KeyboardKey::KEY_W | KeyboardKey::KEY_S => (),
+                        _ => break,
+                    }
+                }
             }
             self.update();
             self.draw();

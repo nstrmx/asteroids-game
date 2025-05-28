@@ -1,44 +1,178 @@
 use rand::*;
 use raylib::prelude::*;
 
-use crate::{SCREEN_WIDTH, SCREEN_HEIGHT, Textures, Collidable};
+use crate::{check_collision_circle_triangle, Circle, Event, Textures, Triangle, SCREEN_HEIGHT, SCREEN_WIDTH};
 
 
 pub type EntityId = usize;
 
 #[derive(Debug)]
-pub enum EntityType {
-    Player,
-    Enemy,
-    Projectile,
+pub enum Entity {
+    Player(Box<Player>),
+    Enemy(Box<Asteroid>),
+    Projectile(Box<Lazer>),
+    Star(Box<Star>),
     Indestructible,
 }
 
-pub trait Entity {
-    fn entity_type(&self) -> &EntityType;
-    fn update(&mut self, rl: &mut RaylibHandle);
-    fn draw(&self, d: &mut RaylibDrawHandle, textures: &Textures);
-    fn as_collidable(&self) -> Option<&dyn Collidable> {
-        None
+impl Entity {
+    pub fn check_collision(&self, other: &Entity) -> bool {
+        match (self, other) {
+            (Self::Player(e1), Self::Enemy(e2)) | (Self::Enemy(e2), Self::Player(e1)) => {
+                check_collision_circle_triangle(
+                    &Circle::from_rect(&e2.rect),
+                    &Triangle::from_rect(&e1.rect),
+                )
+            }
+            (Self::Projectile(e1), Self::Enemy(e2)) | (Self::Enemy(e2), Self::Projectile(e1)) => {
+                let circle = Circle::from_rect(&e2.rect);
+                e1.rect.check_collision_circle_rec(circle.center, circle.radius)
+            }
+            (Self::Enemy(e1), Self::Enemy(e2)) => {
+                let c1 = Circle::from_rect(&e1.rect);
+                let c2 = Circle::from_rect(&e2.rect);
+                check_collision_circles(c1.center, c1.radius, c2.center, c2.radius)
+            }
+            _ => false,
+        }
     }
-    fn as_movable(&self) -> Option<&dyn Movable> {
-        None
+
+    pub fn on_collision(&mut self, other: &mut Entity, world: &mut crate::World) -> Vec<Event> {
+        let mut events = vec![];
+        match (self, other) {
+            (Self::Player(_e1), Self::Enemy(_e2)) | (Self::Enemy(_e2), Self::Player(_e1)) => {
+                events.push(Event::GameOver);
+            }
+            (Self::Projectile(e1), Self::Enemy(e2)) | (Self::Enemy(e2), Self::Projectile(e1)) => {
+                events.push(Event::ScoreIncreased);
+                events.push(Event::NumberOfAsteroidsIncreased);
+                events.push(Event::ResetAsteroid(e2.id));
+                events.push(Event::EntityDestroyed(e1.id));
+            }
+            (Self::Enemy(e1), Self::Enemy(e2)) => {
+                let (v1, v2) = crate::elastic_collision_1d(e1.mass, e1.velocity.y, e2.mass, e2.velocity.y);
+                e1.velocity = Vector2::new(0., v1);
+                e2.velocity = Vector2::new(0., v2);
+            }
+            _ => (),               
+        };
+        events
     }
-    fn as_movable_mut(&mut self) -> Option<&mut dyn Movable> {
-        None
+    
+    pub fn update(&mut self, rl: &mut RaylibHandle, delta_time: f32) {
+        match self {
+            Self::Player(e) => {
+                // Handle horizontal movement (A/D or Left/Right)
+                if rl.is_key_down(KeyboardKey::KEY_RIGHT) || rl.is_key_down(KeyboardKey::KEY_D) {
+                    e.velocity.x += e.acceleration * delta_time;
+                } 
+                else if rl.is_key_down(KeyboardKey::KEY_LEFT) || rl.is_key_down(KeyboardKey::KEY_A) {
+                    e.velocity.x -= e.acceleration * delta_time;
+                }
+
+                // Handle vertical movement (W/S or Up/Down)
+                if rl.is_key_down(KeyboardKey::KEY_UP) || rl.is_key_down(KeyboardKey::KEY_W) {
+                    e.velocity.y -= e.acceleration * delta_time;
+                } 
+                else if rl.is_key_down(KeyboardKey::KEY_DOWN) || rl.is_key_down(KeyboardKey::KEY_S) {
+                    e.velocity.y += e.acceleration * delta_time;
+                }
+
+                // Clamp velocity to max speed (using vector length for diagonal movement)
+                let velocity_magnitude = (e.velocity.x * e.velocity.x + e.velocity.y * e.velocity.y).sqrt();
+                if velocity_magnitude > e.max_velocity {
+                    e.velocity.x = (e.velocity.x / velocity_magnitude) * e.max_velocity;
+                    e.velocity.y = (e.velocity.y / velocity_magnitude) * e.max_velocity;
+                }
+
+                // Apply friction (only if no input is pressed)
+                let is_moving_horizontally = rl.is_key_down(KeyboardKey::KEY_LEFT) || 
+                                             rl.is_key_down(KeyboardKey::KEY_RIGHT) || 
+                                             rl.is_key_down(KeyboardKey::KEY_A) || 
+                                             rl.is_key_down(KeyboardKey::KEY_D);
+                let is_moving_vertically = rl.is_key_down(KeyboardKey::KEY_UP) || 
+                                           rl.is_key_down(KeyboardKey::KEY_DOWN) || 
+                                           rl.is_key_down(KeyboardKey::KEY_W) || 
+                                           rl.is_key_down(KeyboardKey::KEY_S);
+
+                if !is_moving_horizontally {
+                    e.velocity.x *= (1.0 - e.friction * delta_time).max(0.0);
+                }
+                if !is_moving_vertically {
+                    e.velocity.y *= (1.0 - e.friction * delta_time).max(0.0);
+                }
+
+                // Update position
+                e.rect.x += e.velocity.x * delta_time;
+                e.rect.y += e.velocity.y * delta_time;
+
+                // Clamp position to screen bounds
+                e.rect.x = e.rect.x.clamp(0.0, SCREEN_WIDTH!() - e.rect.width);
+                e.rect.y = e.rect.y.clamp(0.0, SCREEN_HEIGHT!() - e.rect.height);
+            }
+            Self::Enemy(e) => {
+                e.rect.x += e.velocity.x * delta_time;
+                e.rect.y += e.velocity.y * delta_time;
+                e.rotation = (e.rotation + e.rotation_velocity) % 360. * delta_time;
+                // Reset e when it goes off screen
+                if e.rect.y > SCREEN_HEIGHT!() {
+                    e.reset();
+                }
+            }
+            Self::Projectile(e) => {
+                e.rect.y -= e.speed as f32 * delta_time;
+            }
+            Self::Star(e) => {
+                e.pos.y += e.velocity * delta_time;
+                if e.pos.y > SCREEN_HEIGHT!() {
+                    e.pos.x = rand::rng().random_range(0.0..SCREEN_HEIGHT!());
+                    e.pos.y = -1.;
+                }
+            }
+            _ => ()
+        }    
+    }
+
+    pub fn _is_camera_affected(&self) -> bool {
+        matches!(self, Self::Player(_) | Self::Enemy(_) | Self::Projectile(_))
+    }
+    
+    pub fn draw(&self, d: &mut RaylibDrawHandle, textures: &Textures) {
+        match self {
+            Self::Player(e) => {
+                d.draw_texture_pro(
+                    textures.get("player").unwrap(),
+                    Rectangle::new(0., 0., 40., 40.),
+                    Rectangle::new(e.rect.x, e.rect.y, e.rect.width, e.rect.height + 40.),
+                    Vector2::zero(),
+                    0., Color::WHITE
+                );
+                // let tri = Triangle::from_rect(&e.rect);
+                // d.draw_triangle(tri.a, tri.b, tri.c, Color::GOLD);
+            }
+            Self::Enemy(e) => {
+                d.draw_texture_pro(
+                    textures.get("asteroid").unwrap(),
+                    Rectangle::new(0., 0., 23., 23.),
+                    Rectangle::new(e.rect.x + e.rect.width / 2., e.rect.y + e.rect.height / 2., e.rect.width, e.rect.height),
+                    Vector2::new(e.rect.width / 2., e.rect.height / 2.),
+                    e.rotation, e.color
+                );
+                // d.draw_rectangle_rec(e.rect, e.color);
+            }
+            Self::Projectile(e) => {
+                d.draw_rectangle_rec(e.rect, e.color);
+            }
+            Self::Star(e) => {
+                d.draw_pixel_v(e.pos, e.color);
+            }
+            _ => ()
+        }
     }
 }
 
-pub trait Movable {
-    fn vel(&self) -> &Vector2;
-    fn vel_mut(&mut self) -> &mut Vector2;   
-    fn mass(&self) -> &f32;
-    fn rot(&self) -> &f32;
-    fn rot_mut(&mut self) -> &mut f32;
-    fn rot_vel(&self) -> &f32;
-    fn rot_vel_mut(&mut self) -> &mut f32;
-}
 
+#[derive(Debug)]
 pub struct Player {
     pub rect: Rectangle,
     acceleration: f32,
@@ -53,142 +187,39 @@ impl Player {
         let height = 60.;
         Self{
             rect: Rectangle::new(
-                SCREEN_WIDTH / 2. - width / 2.,
-                SCREEN_HEIGHT - height - 50.,
+                SCREEN_WIDTH!()/2. - width/2.,
+                SCREEN_HEIGHT!() - height - 50.,
                 width, height),
-            acceleration: 0.3,
-            friction: 0.15,
-            max_velocity: 5.,
+            acceleration: 1000.,
+            friction: 10.,
+            max_velocity: 500.,
             velocity: Vector2::new(0., 0.),
         }
     }
 }
 
-impl Entity for Player {
-    fn entity_type(&self) -> &EntityType {
-        &EntityType::Player
-    }
 
-    fn as_collidable(&self) -> Option<&dyn Collidable> {
-        Some(self)
-    }
-
-    fn update(&mut self, rl: &mut RaylibHandle) {
-        if rl.is_key_down(KeyboardKey::KEY_RIGHT) | rl.is_key_down(KeyboardKey::KEY_D) {
-            self.velocity.x = if self.velocity.x > self.max_velocity { self.max_velocity } else { self.velocity.x + self.acceleration };
-        }
-        if rl.is_key_down(KeyboardKey::KEY_LEFT) | rl.is_key_down(KeyboardKey::KEY_A) {
-            self.velocity.x = if self.velocity.x < -self.max_velocity { -self.max_velocity } else { self.velocity.x - self.acceleration };
-        }
-        if rl.is_key_down(KeyboardKey::KEY_UP) | rl.is_key_down(KeyboardKey::KEY_W) {
-            self.velocity.y = if self.velocity.y < -self.max_velocity { -self.max_velocity } else { self.velocity.y - self.acceleration };
-        }
-        if rl.is_key_down(KeyboardKey::KEY_DOWN) | rl.is_key_down(KeyboardKey::KEY_S) {
-            self.velocity.y = if self.velocity.y > self.max_velocity { self.max_velocity } else { self.velocity.y + self.acceleration };
-        }
-
-        self.rect.x += self.velocity.x;
-        self.rect.y += self.velocity.y;
-
-        if self.rect.x > SCREEN_WIDTH - self.rect.width {
-            self.rect.x = SCREEN_WIDTH - self.rect.width;
-        } else if self.rect.x < 0. {
-            self.rect.x = 0.;
-        }
-        if self.rect.y > SCREEN_HEIGHT - self.rect.height {
-            self.rect.y = SCREEN_HEIGHT - self.rect.height;
-        } else if self.rect.y < 0. {
-            self.rect.y = 0.;
-        }
-
-        if self.velocity.x > 0. {
-            self.velocity.x -= f32::max(self.friction, -self.velocity.x);
-        } else if self.velocity.x < 0. {
-            self.velocity.x += f32::min(self.friction, -self.velocity.x);
-        }
-        if self.velocity.y > 0. {
-            self.velocity.y -= f32::max(self.friction, -self.velocity.y);
-        } else if self.velocity.y < 0. {
-            self.velocity.y += f32::min(self.friction, -self.velocity.y);
-        }
-    }
-
-    fn draw(&self, d: &mut RaylibDrawHandle, textures: &Textures) {
-        d.draw_texture_pro(
-            textures.get("player").unwrap(),
-            Rectangle::new(0., 0., 40., 40.),
-            Rectangle::new(self.rect.x, self.rect.y, self.rect.width, self.rect.height + 40.),
-            Vector2::zero(),
-            0., Color::WHITE
-        );
-        // let rect1 = self.rect;
-        // d.draw_triangle(
-        //     Vector2::new(rect1.x, rect1.y+rect1.height),
-        //     Vector2::new(rect1.x+rect1.width, rect1.y+rect1.height),
-        //     Vector2::new(rect1.x+rect1.width/2., rect1.y),
-        //     Color::GOLD
-        // );
-    }
-}
-
+#[derive(Debug)]
 pub struct Lazer {
+    pub id: EntityId,
     pub rect: Rectangle,
     color: Color,
     speed: i32,
 }
 
 impl Lazer {
-    pub fn new(x: f32, y: f32) -> Self {
+    pub fn new(id: EntityId, x: f32, y: f32) -> Self {
         Self {
+            id,
             rect: Rectangle::new(x, y - 45., 2., 45.),
             color: Color::RED,
-            speed: 11,
+            speed: 1100,
         }
     }
 }
 
-impl Entity for Lazer {
-    fn entity_type(&self) -> &EntityType {
-        &EntityType::Projectile    
-    }
-    
-    fn as_collidable(&self) -> Option<&dyn Collidable> {
-        Some(self)
-    }
 
-    fn update(&mut self, _rl: &mut RaylibHandle) {
-        self.rect.y -= self.speed as f32;
-    }
-
-    fn draw(&self, d: &mut RaylibDrawHandle, _textures: &Textures) {
-        d.draw_rectangle_rec(self.rect, self.color);
-    } 
-}
-
-pub struct Barrier {
-    pub rect: Rectangle,
-}
-
-impl Barrier {
-    pub fn new(width: f32, height: f32) -> Self {
-        Self{rect: Rectangle::new(0., -height, width, height) }
-    }
-}
-
-impl Entity for Barrier {
-    fn entity_type(&self) -> &EntityType {
-        &EntityType::Indestructible        
-    }
-
-    fn update(&mut self, _rl: &mut RaylibHandle) {}
-
-    fn draw(&self, _d: &mut RaylibDrawHandle, _: &Textures) {}
-
-    fn as_collidable(&self) -> Option<&dyn Collidable> {
-        Some(self)
-    }
-}
-
+#[derive(Debug)]
 pub struct Star {
     pos: Vector2,
     velocity: f32,
@@ -201,8 +232,8 @@ impl Star {
         color.a = rand::rng().random_range(100..255);
         Self {
             pos: Vector2::new(
-                rand::rng().random_range(0.0..SCREEN_WIDTH),
-                rand::rng().random_range(0.0..SCREEN_HEIGHT)
+                rand::rng().random_range(0.0..SCREEN_WIDTH!()),
+                rand::rng().random_range(0.0..SCREEN_HEIGHT!())
             ),
             velocity,
             color
@@ -210,25 +241,10 @@ impl Star {
     }
 }
 
-impl Entity for Star {
-    fn entity_type(&self) -> &EntityType {
-        &EntityType::Indestructible
-    }
 
-    fn update(&mut self, _rl: &mut RaylibHandle) {
-        self.pos.y += self.velocity;
-        if self.pos.y > SCREEN_HEIGHT {
-            self.pos.x = rand::rng().random_range(0.0..SCREEN_WIDTH);
-            self.pos.y = -1.;
-        }
-    }
-
-    fn draw(&self, d: &mut RaylibDrawHandle, _textures: &Textures) {
-        d.draw_pixel_v(self.pos, self.color);
-    }
-}
-
+#[derive(Debug)]
 pub struct Asteroid {
+    pub id: EntityId,
     pub rect: Rectangle,
     velocity: Vector2,
     mass: f32,
@@ -238,18 +254,19 @@ pub struct Asteroid {
 }
 
 impl Asteroid {
-    pub fn new() -> Asteroid {
-        let x = rand::rng().random_range(0.0..SCREEN_WIDTH);
-        let y = rand::rng().random_range(-SCREEN_HEIGHT..0.0);
+    pub fn new(id: EntityId) -> Asteroid {
+        let x = rand::rng().random_range(0.0..SCREEN_WIDTH!());
+        let y = rand::rng().random_range(-SCREEN_HEIGHT!()..0.0);
         let size = rand::rng().random_range(10.0..40.);
         let width = size; 
         let height = size;
-        Self{
+        Self {
+            id,
             rect: Rectangle::new(x, y, width, height),
-            velocity: Vector2::new(0., rand::rng().random_range(2.0..5.)),
-            mass: 200. / 40. * size,
+            velocity: Vector2::new(0., rand::rng().random_range(200.0..300.)),
+            mass: 100. / 40. * size * 100.,
             rotation: 0.,
-            rotation_velocity: rand::rng().random_range(-5.0..5.0),
+            rotation_velocity: rand::rng().random_range(-50.0..50.0),
             color: Color {
                 r: rand::rng().random_range(200..255),
                 g: rand::rng().random_range(235..255),
@@ -258,76 +275,26 @@ impl Asteroid {
             }
         }
     }
-}
 
-impl Entity for Asteroid {
-    fn entity_type(&self) -> &EntityType {
-        &EntityType::Enemy
-    }
-
-    fn as_collidable(&self) -> Option<&dyn Collidable> {
-        Some(self)
-    }
-
-    fn as_movable(&self) -> Option<&dyn Movable> {
-        Some(self)
-    }
-
-    fn as_movable_mut(&mut self) -> Option<&mut dyn Movable> {
-        Some(self)
-    }
-
-    fn update(&mut self, _rl: &mut RaylibHandle) {
-        self.rect.x += self.velocity.x;
-        self.rect.y += self.velocity.y;
-        self.rotation = (self.rotation + self.rotation_velocity) % 360.;
-        // Reset self when it goes off screen
-        if self.rect.y > SCREEN_HEIGHT {
-            self.velocity.x = 0.;
-            self.velocity.y = rand::rng().random_range(2.0..5.);
-            self.rect.x = rand::rng().random_range(0.0..SCREEN_WIDTH-self.rect.width);
-            self.rect.y = -self.rect.height - 10.;
-        }
-    }
-
-    fn draw(&self, d: &mut RaylibDrawHandle, textures: &Textures) {
-        d.draw_texture_pro(
-            textures.get("asteroid").unwrap(),
-            Rectangle::new(0., 0., 23., 23.),
-            Rectangle::new(self.rect.x + self.rect.width / 2., self.rect.y + self.rect.height / 2., self.rect.width, self.rect.height),
-            Vector2::new(self.rect.width / 2., self.rect.height / 2.),
-            self.rotation, self.color
-        );
-        // d.draw_rectangle_rec(self.rect, self.color);
-    }
-}
-
-impl Movable for Asteroid {
-    fn vel(&self) -> &Vector2 {
-        &self.velocity
-    }
-
-    fn vel_mut(&mut self) -> &mut Vector2 {
-        &mut self.velocity
-    }
-
-    fn mass(&self) -> &f32 {
-        &self.mass
-    }
-
-    fn rot(&self) -> &f32 {
-        &self.rotation
-    }
-
-    fn rot_mut(&mut self) -> &mut f32 {
-        &mut self.rotation
-    }
-
-    fn rot_vel(&self) -> &f32 {
-        &self.rotation_velocity
-    }
-
-    fn rot_vel_mut(&mut self) -> &mut f32 {
-        &mut self.rotation_velocity
+    pub fn reset(&mut self) {
+        let x = rand::rng().random_range(0.0..SCREEN_WIDTH!());
+        let y = rand::rng().random_range(-SCREEN_HEIGHT!()..0.0);
+        let size = rand::rng().random_range(10.0..40.);
+        let width = size; 
+        let height = size;
+        *self = Self {
+            id: self.id,
+            rect: Rectangle::new(x, y, width, height),
+            velocity: Vector2::new(0., rand::rng().random_range(200.0..300.)),
+            mass: 100. / 40. * size * 100.,
+            rotation: 0.,
+            rotation_velocity: rand::rng().random_range(-50.0..50.0),
+            color: Color {
+                r: rand::rng().random_range(200..255),
+                g: rand::rng().random_range(235..255),
+                b: rand::rng().random_range(245..255),
+                a: 255
+            }
+        };
     }
 }

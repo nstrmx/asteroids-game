@@ -12,6 +12,15 @@ pub struct Circle {
     pub radius: f32,    
 }
 
+impl Circle {
+    pub fn from_rect(rect: &Rectangle) -> Self {
+        Self {
+            center: Vector2::new(rect.x+rect.width/2., rect.y+rect.height/2.),
+            radius: rect.width/2.,
+        }
+    }
+}
+
 pub struct Triangle {
     pub a: Vector2,
     pub b: Vector2,
@@ -19,6 +28,14 @@ pub struct Triangle {
 }
 
 impl Triangle {
+    pub fn from_rect(rect: &Rectangle) -> Self {
+        Self {
+            a: Vector2::new(rect.x, rect.y+rect.height),
+            b: Vector2::new(rect.x+rect.width, rect.y+rect.height),
+            c: Vector2::new(rect.x+rect.width/2., rect.y)        
+        }
+    }
+
     pub fn edges(&self) -> [(Vector2, Vector2); 3] {
         [
             (self.a, self.b),

@@ -1,22 +1,27 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use crate::Context;
+
+use crate::EntityId;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-enum EventType {
-	AsteroidDestroyed,
-	PlayerHit,
+pub enum EventType {
+	EntityDestroyed,
+	NumberOfAsteroidsIncreased,
+	ResetAsteroid,
+	ScoreIncreased,
 	GameOver,
 }
 
-enum Event {
-	AsteroidDestroyed{asteroid_id: usize, laser_id: usize},
-	PlayerHit{asteroid_id: usize},
+pub enum Event {
+	EntityDestroyed(EntityId),
+	NumberOfAsteroidsIncreased,
+	ResetAsteroid(EntityId),
+	ScoreIncreased,
 	GameOver,
 }
 
-type EventCallback = Box<dyn Fn(&Event, &mut Context)>;
+type EventCallback = Box<dyn Fn(&Event, &mut crate::Game)>;
 
 pub struct EventBus {
 	listeners: HashMap<EventType, Vec<EventCallback>>,
@@ -29,7 +34,7 @@ impl EventBus {
         }    
     }
     
-    fn subscribe(&mut self, event_type: EventType, callback: EventCallback) {
+    pub fn subscribe(&mut self, event_type: EventType, callback: EventCallback) {
         if let Some(callbacks) = self.listeners.get_mut(&event_type){
         	callbacks.push(callback);    
         } else {
@@ -37,7 +42,7 @@ impl EventBus {
         }
     }    
 
-    fn publish(&mut self, event_type: EventType, event: Event, ctx: &mut Context) {
+    pub fn publish(&mut self, event_type: EventType, event: Event, ctx: &mut crate::Game) {
     	for callback in self.listeners.get_mut(&event_type).unwrap() {
     		callback(&event, ctx);
     	}
